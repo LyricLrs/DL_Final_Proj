@@ -26,17 +26,44 @@ class MockModel(torch.nn.Module):
         self.bs = bs
         self.n_steps = n_steps
         self.repr_dim = 256
+        
+        self.encoder = nn.Sequential(
+            nn.Conv2d(in_channels=2, out_channels=64, kernel_size=3, stride=1, padding=1),  # Adjusted for 2-channel input
+            nn.ReLU(),
+            nn.MaxPool2d(2),  # Downsampling
+            nn.Conv2d(64, 128, 3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.AdaptiveAvgPool2d((1, 1)),  # Outputs [B, C, 1, 1], regardless of input size
+            nn.Flatten(),
+            build_mlp([128, 512, self.repr_dim])  # 128 -> 512 -> output_dim
+        )
+
+        # Predictor (GRU) for sequential state prediction
+        self.predictor = nn.GRU(input_size=self.repr_dim + 2, hidden_size=self.repr_dim, batch_first=True)
+
 
     def forward(self, states, actions):
         """
         Args:
-            states: [B, T, Ch, H, W]
-            actions: [B, T-1, 2]
+            states: [B, T, Ch, H, W]  (147008, 17, 2, 65, 65)
+            actions: [B, T-1, 2]  (147008, 16, 2)
 
         Output:
             predictions: [B, T, D]
         """
-        return torch.randn((self.bs, self.n_steps, self.repr_dim)).to(self.device)
+        B, T, C, H, W = states.shape
+        
+        # Encode states
+        encoded_states = self.encoder(states.view(-1, C, H, W)).view(B, T, -1)
+
+        # Pad actions to match T and concatenate with encoded states
+        actions = F.pad(actions, (0, 0, 1, 0))  # Pad along time dimension
+        inputs = torch.cat([encoded_states, actions], dim=-1)
+
+        # Predict latent states
+        predictions, _ = self.predictor(inputs)
+        return predictions
 
 
 class Prober(torch.nn.Module):
@@ -63,3 +90,36 @@ class Prober(torch.nn.Module):
     def forward(self, e):
         output = self.prober(e)
         return output
+
+# def test_mock_model():
+#     # Define test parameters
+#     batch_size = 64 
+#     time_steps = 17  # Number of time steps for states
+#     action_steps = time_steps - 1  # Number of time steps for actions
+#     channels = 2  # Number of channels in states
+#     height, width = 65, 65  # Spatial dimensions of states
+#     action_dim = 2  # Dimensionality of actions
+#     repr_dim = 256  # Dimensionality of model representation output
+
+#     # Generate synthetic test data
+#     states = torch.randn(batch_size, time_steps, channels, height, width, dtype=torch.float32)  # [B, T, C, H, W]
+#     actions = torch.randn(batch_size, action_steps, action_dim, dtype=torch.float32)  # [B, T-1, 2]
+
+#     # Initialize the model
+#     model = MockModel(device="cpu", bs=batch_size, n_steps=time_steps, output_dim=repr_dim)
+
+#     # Pass data through the model
+#     predictions = model(states, actions)
+
+#     # Print input and output shapes to validate
+#     print(f"States shape: {states.shape}")  # Expected: [B, T, C, H, W]
+#     print(f"Actions shape: {actions.shape}")  # Expected: [B, T-1, 2]
+#     print(f"Predictions shape: {predictions.shape}")  # Expected: [B, T, repr_dim]
+
+#     # Validate output shape
+#     assert predictions.shape == (batch_size, time_steps, repr_dim), \
+#         f"Output shape mismatch: expected {(batch_size, time_steps, repr_dim)}, got {predictions.shape}"
+#     print("Model handled data correctly!")
+
+# if __name__ == "__main__":
+#     test_mock_model()
