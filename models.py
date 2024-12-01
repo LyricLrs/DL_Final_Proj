@@ -58,7 +58,7 @@ class MockModel(torch.nn.Module):
         encoded_states = self.encoder(states.view(-1, C, H, W)).view(B, T, -1)
 
         # Pad actions to match T and concatenate with encoded states
-        actions = F.pad(actions, (0, 0, 1, 0))  # Pad along time dimension
+        actions = F.pad(actions, (0, 0, 0, 1))  # Pad along time dimension
         inputs = torch.cat([encoded_states, actions], dim=-1)
 
         # Predict latent states

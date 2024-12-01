@@ -45,6 +45,13 @@ def load_model():
     """Load or initialize the model."""
     # TODO: Replace MockModel with your trained model
     model = MockModel()
+
+    model_path = "best_model.pth"
+    checkpoint = torch.load(model_path, map_location=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+    model.load_state_dict(checkpoint)
+    model = model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+    model.eval()
+
     return model
 
 
