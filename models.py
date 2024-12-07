@@ -15,83 +15,44 @@ def build_mlp(layers_dims: List[int]):
     layers.append(nn.Linear(layers_dims[-2], layers_dims[-1]))
     return nn.Sequential(*layers)
 
-import torch
-import torch.nn as nn
 
-class BasicBlock(nn.Module):
-    expansion = 1
+class VICRegLoss(nn.Module):
+    def __init__(self, lambda_invariance=25, mu_variance=25, nu_covariance=1):
+        super().__init__()
+        self.lambda_invariance = lambda_invariance
+        self.mu_variance = mu_variance
+        self.nu_covariance = nu_covariance
 
-    def __init__(self, in_planes, planes, stride=1):
-        super(BasicBlock, self).__init__()
-        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(planes)
-        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(planes)
+    def forward(self, pred_encs, target_encs):
+        # Invariance term (MSE)
+        invariance_loss = F.mse_loss(pred_encs, target_encs)
 
-        self.shortcut = nn.Sequential()
-        if stride != 1 or in_planes != self.expansion * planes:
-            self.shortcut = nn.Sequential(
-                nn.Conv2d(in_planes, self.expansion * planes, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(self.expansion * planes),
-            )
+        # Variance term
+        batch_var_pred = torch.var(pred_encs, dim=0) + 1e-4
+        batch_var_target = torch.var(target_encs, dim=0) + 1e-4
+        variance_loss = torch.mean(F.relu(1 - batch_var_pred)) + torch.mean(F.relu(1 - batch_var_target))
 
-    def forward(self, x):
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = nn.ReLU()(out)
-        out = self.conv2(out)
-        out = self.bn2(out)
-        out += self.shortcut(x)
-        out = nn.ReLU()(out)
-        return out
+        # Covariance term
+        pred_centered = pred_encs - pred_encs.mean(dim=0)
+        pred_cov = (pred_centered.mT @ pred_centered) / (pred_encs.size(0) - 1)
 
+        # print(f"pred_encs shape: {pred_encs.shape}")  # Expected: [B, D]
+        # print(f"pred_cov shape: {pred_cov.shape}")   # Expected: [D, D]
 
-class ResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes=1000, input_channels=3):
-        super(ResNet, self).__init__()
-        self.in_planes = 64
+        target_centered = target_encs - target_encs.mean(dim=0)
+        target_cov = (target_centered.mT @ target_centered) / (target_encs.size(0) - 1)
 
-        # Adjust input_channels for the first convolution
-        self.conv1 = nn.Conv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        self.bn1 = nn.BatchNorm2d(64)
-        self.relu = nn.ReLU()
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        pred_cov_loss = torch.sum(torch.triu(pred_cov ** 2, diagonal=1)) / pred_encs.size(1)
+        target_cov_loss = torch.sum(torch.triu(target_cov ** 2, diagonal=1)) / target_encs.size(1)
+        covariance_loss = pred_cov_loss + target_cov_loss
 
-        self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
-        self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
-        self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
-        self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
-
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(512 * block.expansion, num_classes)
-
-    def _make_layer(self, block, planes, num_blocks, stride):
-        strides = [stride] + [1] * (num_blocks - 1)
-        layers = []
-        for stride in strides:
-            layers.append(block(self.in_planes, planes, stride))
-            self.in_planes = planes * block.expansion
-        return nn.Sequential(*layers)
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
-
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-
-        x = self.avgpool(x)
-        x = torch.flatten(x, 1)
-        x = self.fc(x)
-        return x
-
-
-def ResNet18(num_classes=1000, input_channels=3):
-    return ResNet(BasicBlock, [2, 2, 2, 2], num_classes=num_classes, input_channels=input_channels)
+        # Combine losses
+        total_loss = (
+            self.lambda_invariance * invariance_loss +
+            self.mu_variance * variance_loss +
+            self.nu_covariance * covariance_loss
+        )
+        return total_loss
   
 class MockModel(torch.nn.Module):
     """
@@ -233,10 +194,11 @@ class MockModel(torch.nn.Module):
 
         early_stopping = EarlyStopping(patience=10, delta=1e-4)
         epoch_losses = []  # To track losses per epoch
+        vicreg_loss_fn = VICRegLoss()
 
         for epoch in tqdm(range(num_epochs), desc="Model training epochs"):
             batch_losses = []  # Track losses per batch
-            for batch in tqdm(dataset, desc="Model training step"):
+            for batch_idx, batch in enumerate(tqdm(dataset, desc="Model training step")):
                 states = batch.states.to(device)
                 actions = batch.actions.to(device)
 
@@ -249,7 +211,8 @@ class MockModel(torch.nn.Module):
                 #     visualize_latent_states(target_encs,f'target: {epoch}')
                 #     visualize_latent_states(pred_encs,f'pred: {epoch}')
 
-                loss = torch.nn.functional.mse_loss(pred_encs, target_encs)
+                #loss = torch.nn.functional.mse_loss(pred_encs, target_encs)
+                loss = vicreg_loss_fn(pred_encs, target_encs)
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -261,6 +224,7 @@ class MockModel(torch.nn.Module):
             avg_epoch_loss = sum(batch_losses) / len(batch_losses)  # Average epoch loss
             epoch_losses.append(avg_epoch_loss)
             print(f"Epoch {epoch + 1}/{num_epochs}, Avg Loss: {avg_epoch_loss:.8f}")
+            print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {loss.item():.8f}")
 
              # Step the scheduler
             scheduler.step()
