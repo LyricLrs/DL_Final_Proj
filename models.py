@@ -5,6 +5,7 @@ from torch.nn import functional as F
 import torch
 from tqdm.auto import tqdm
 from resnet import resnet34
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
 def build_mlp(layers_dims: List[int]):
     layers = []
@@ -17,7 +18,7 @@ def build_mlp(layers_dims: List[int]):
 
 
 class VICRegLoss(nn.Module):
-    def __init__(self, lambda_invariance=25, mu_variance=25, nu_covariance=1):
+    def __init__(self, lambda_invariance=25, mu_variance=15, nu_covariance=0.5):
         super().__init__()
         self.lambda_invariance = lambda_invariance
         self.mu_variance = mu_variance
@@ -35,9 +36,6 @@ class VICRegLoss(nn.Module):
         # Covariance term
         pred_centered = pred_encs - pred_encs.mean(dim=0)
         pred_cov = (pred_centered.mT @ pred_centered) / (pred_encs.size(0) - 1)
-
-        # print(f"pred_encs shape: {pred_encs.shape}")  # Expected: [B, D]
-        # print(f"pred_cov shape: {pred_cov.shape}")   # Expected: [D, D]
 
         target_centered = target_encs - target_encs.mean(dim=0)
         target_cov = (target_centered.mT @ target_centered) / (target_encs.size(0) - 1)
@@ -138,14 +136,12 @@ class MockModel(torch.nn.Module):
         Args:
             dataset: A PyTorch DataLoader containing the training data.
         """
-        # Training parameters (hardcoded)
-        learning_rate = 0.0001  # Example learning rate
-        num_epochs = 100        # Number of epochs
-        device = self.device   # Use the device specified in the model
+        learning_rate = 0.001 
+        num_epochs = 100      
+        device = self.device   
         self.train()
 
         # Functions
-        from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate, weight_decay=1e-3)
 
