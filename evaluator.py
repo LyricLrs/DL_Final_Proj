@@ -93,8 +93,11 @@ class ProbingEvaluator:
 
         optimizer_pred_prober = torch.optim.Adam(all_parameters, config.lr)
 
+        # all_parameters = list(self.model.parameters()) + list(prober.parameters())
+        # optimizer_pred_prober = torch.optim.Adam(all_parameters, config.lr)
         step = 0
 
+        
         batch_size = dataset.batch_size
         batch_steps = None
 
@@ -112,9 +115,27 @@ class ProbingEvaluator:
             for batch in tqdm(dataset, desc="Probe prediction step"):
                 ################################################################################
                 # TODO: Forward pass through your model
-                pred_encs = model(states=batch.states, actions=batch.actions)
-                pred_encs = pred_encs.transpose(0, 1)  # # BS, T, D --> T, BS, D
+                # Initialize latent state using the initial state
+                init_states = batch.states[:, 0:1]  # [B, 1, C, H, W]
+                init_latent = model(states=init_states, actions=None, train=False)  # Encode initial state
 
+                # Prepare for autoregressive generation
+                B, T, _ = batch.actions.shape  # Batch size, timesteps, action dimension
+                latent_states = [init_latent.squeeze(1)]  # Start with the initial latent state
+
+                for t in range(batch.actions.shape[1]):  # Iterate through timesteps
+                    current_action = batch.actions[:, t, :].unsqueeze(1)  # [B, 1, 2]
+                    input_to_predictor = torch.cat([latent_states[-1].unsqueeze(1), current_action], dim=-1)  # [B, 1, repr_dim + 2]
+
+                    # Extract the output from the GRU
+                    output, _ = self.model.predictor(input_to_predictor)  # GRU returns (output, hidden_state)
+                    latent_states.append(output.squeeze(1))  # Append the latent state [B, repr_dim]
+
+                # Stack latent states to form [T, B, D]
+                pred_encs = torch.stack(latent_states, dim=0)  # [T, B, repr_dim]
+
+                # init_states = batch.states[:, 0:1]  # [B, 1, C, H, W]
+                # pred_encs, target_encs = model(states=batch.states, actions=batch.actions, train=True)
                 # Make sure pred_encs has shape (T, BS, D) at this point
                 ################################################################################
 
@@ -209,9 +230,26 @@ class ProbingEvaluator:
         for idx, batch in enumerate(tqdm(val_ds, desc="Eval probe pred")):
             ################################################################################
             # TODO: Forward pass through your model
-            pred_encs = model(states=batch.states, actions=batch.actions)
-            # # BS, T, D --> T, BS, D
-            pred_encs = pred_encs.transpose(0, 1)
+            # Initialize latent state using the initial state
+            init_states = batch.states[:, 0:1]  # [B, 1, C, H, W]
+            init_latent = model(states=init_states, actions=None, train=False)  # [B, repr_dim]
+
+            B, T, _ = batch.actions.shape  # Batch size, timesteps, action_dim
+            latent_states = [init_latent]  # Start with the initial latent state
+
+            # Autoregressive generation of latent states
+            for t in range(T):
+                current_action = batch.actions[:, t, :].unsqueeze(1)  # [B, 1, action_dim]
+                input_to_predictor = torch.cat(
+                    [latent_states[-1].unsqueeze(1), current_action], dim=-1
+                )  # [B, 1, repr_dim + action_dim]
+
+                # Call predictor through the model
+                output, _ = model.predictor(input_to_predictor)  # Use self.model.predictor
+                latent_states.append(output.squeeze(1))  # Append [B, repr_dim]
+
+            # Combine latent states across timesteps
+            pred_encs = torch.stack(latent_states, dim=0)  # [T, B, repr_dim]
 
             # Make sure pred_encs has shape (T, BS, D) at this point
             ################################################################################
