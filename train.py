@@ -162,12 +162,12 @@ if __name__ == "__main__":
         save_path="best_model.pth"
     )
 
-  '''
-Epoch 1: New best model saved with energy 0.0001
-Epoch 1/5, Average Energy: 0.0001, Time: 149.65s
-Epoch 2/5, Average Energy: 0.0001, Time: 144.61s
-Epoch 3: New best model saved with energy 0.0000
-Epoch 3/5, Average Energy: 0.0000, Time: 144.12s
-Epoch 4/5, Average Energy: 0.0000, Time: 143.83s
-Epoch 5/5, Average Energy: 0.0000, Time: 143.76s
-  ''' 
+#   '''
+# Epoch 1: New best model saved with energy 0.0001
+# Epoch 1/5, Average Energy: 0.0001, Time: 149.65s
+# Epoch 2/5, Average Energy: 0.0001, Time: 144.61s
+# Epoch 3: New best model saved with energy 0.0000
+# Epoch 3/5, Average Energy: 0.0000, Time: 144.12s
+# Epoch 4/5, Average Energy: 0.0000, Time: 143.83s
+# Epoch 5/5, Average Energy: 0.0000, Time: 143.76s
+#   ''' 

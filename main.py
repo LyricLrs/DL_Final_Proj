@@ -4,6 +4,8 @@ import torch
 from models import MockModel
 import glob
 
+import os
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 def get_device():
     """Check for GPU availability."""
@@ -20,6 +22,7 @@ def load_data(device):
         probing=True,
         device=device,
         train=True,
+        batch_size=8,
     )
 
     probe_val_normal_ds = create_wall_dataloader(
@@ -27,6 +30,7 @@ def load_data(device):
         probing=True,
         device=device,
         train=False,
+        batch_size=8,
     )
 
     probe_val_wall_ds = create_wall_dataloader(
@@ -34,6 +38,7 @@ def load_data(device):
         probing=True,
         device=device,
         train=False,
+        batch_size=8,
     )
 
     probe_val_ds = {"normal": probe_val_normal_ds, "wall": probe_val_wall_ds}
@@ -46,11 +51,14 @@ def load_model():
     # TODO: Replace MockModel with your trained model
     model = MockModel()
 
-    model_path = "best_model.pth"
+    model_path = "models/vit_epoch1_loss832.2122.pth"
     checkpoint = torch.load(model_path, map_location=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
     model.load_state_dict(checkpoint)
     model = model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
     model.eval()
+
+    # total_params = sum(p.numel() for p in model.parameters())
+    # print(f"Total Parameters: {total_params}")
 
     return model
 
