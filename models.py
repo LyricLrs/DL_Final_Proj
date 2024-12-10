@@ -24,13 +24,13 @@ def build_mlp(layers_dims: List[int]):
     return nn.Sequential(*layers)
   
 class TransformerPredictor(nn.Module):
-    """
-    A simple Transformer-based sequence predictor that takes in a sequence of embeddings + actions.
-    It uses Transformer encoders to process the entire sequence at once.
-    """
     def __init__(self, input_dim, hidden_dim, num_layers=2, n_heads=4, dropout=0.1):
         super().__init__()
         self.input_proj = nn.Linear(input_dim, hidden_dim)
+
+        # Positional encoding
+        self.pos_embedding = nn.Parameter(torch.zeros(1, 1000, hidden_dim))
+        nn.init.normal_(self.pos_embedding, std=0.02)
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=hidden_dim,
@@ -42,14 +42,15 @@ class TransformerPredictor(nn.Module):
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
-        # Project back to the latent dimension if needed
         self.output_proj = nn.Linear(hidden_dim, input_dim)
 
     def forward(self, x):
-        # x: [B, T, input_dim]
-        x = self.input_proj(x)             # [B, T, hidden_dim]
-        x = self.transformer_encoder(x)    # [B, T, hidden_dim]
-        x = self.output_proj(x)            # [B, T, input_dim]
+        B, T, _ = x.shape
+        x = self.input_proj(x) 
+        pos_embed = self.pos_embedding[:, :T, :] 
+        x = x + pos_embed  
+        x = self.transformer_encoder(x)  
+        x = self.output_proj(x) 
         return x
 
 class VisionTransformer(nn.Module):
@@ -139,20 +140,50 @@ class Block(nn.Module):
         x = x_res + self.drop_path(self.mlp(x))
         return x
 
+class TemporalAttention(nn.Module):
+    def __init__(self, input_dim, hidden_dim, dropout=0.1):
+        super().__init__()
+        # Learnable query, key, and value projections
+        self.query_proj = nn.Linear(input_dim, hidden_dim)
+        self.key_proj = nn.Linear(input_dim, hidden_dim)
+        self.value_proj = nn.Linear(input_dim, hidden_dim)
+        self.softmax = nn.Softmax(dim=1)
+        self.dropout = nn.Dropout(dropout)
 
+    def forward(self, x):
+        """
+        Args:
+            x: [B, T, D] - Batch, Temporal Steps, Embedding Dim
+        Returns:
+            output: [B, T, D] - Attention-enhanced latent states
+            weights: [B, T, T] - Attention weights for each time step
+        """
+        query = self.query_proj(x)  # [B, T, hidden_dim]
+        key = self.key_proj(x)     # [B, T, hidden_dim]
+        value = self.value_proj(x) # [B, T, hidden_dim]
+
+        # Compute attention scores
+        attn_scores = torch.matmul(query, key.transpose(-2, -1)) / (key.size(-1) ** 0.5)  # [B, T, T]
+        attn_weights = self.softmax(attn_scores)  # [B, T, T]
+
+        # Apply attention weights
+        weighted_values = torch.matmul(attn_weights, value)  # [B, T, hidden_dim]
+        output = self.dropout(weighted_values)
+
+        return output, attn_weights
 
 class MockModel(nn.Module):
-    def __init__(self, device="cuda", bs=32, n_steps=17, output_dim=None):
+    def __init__(self, device="cuda", bs=64, n_steps=17, output_dim=None):
         super().__init__()
         self.device = device
         self.n_steps = n_steps
 
-        # Custom ViT structure
+        # Vision Transformer as the encoder
         self.vit = VisionTransformer(
             img_size=64,  # Adjust to your input size
             patch_size=8,  # Size of each patch
             in_chans=2,  # Number of channels in your input
-            embed_dim=1024,  # Embedding dimension
+            embed_dim=512,  # Embedding dimension
             depth=8,  # Number of transformer layers
             num_heads=8,  # Number of attention heads
             mlp_ratio=4.0,  # MLP expansion ratio
@@ -161,10 +192,10 @@ class MockModel(nn.Module):
         )
 
         # ViT embedding dimension
-        self.repr_dim = 1024
+        self.repr_dim = 512
 
         # MLP after ViT if needed
-        self.mlp = build_mlp([self.repr_dim, 1024, 512])
+        self.mlp = build_mlp([self.repr_dim, 512, 512])
 
         # BatchNorm and predictor
         final_repr_dim = 512
@@ -173,10 +204,14 @@ class MockModel(nn.Module):
         # Predictor: input dimension is final_repr_dim + 2 (for actions)
         self.predictor = TransformerPredictor(
             input_dim=final_repr_dim + 2,
-            hidden_dim=1024,
+            hidden_dim=512,
             num_layers=4,
             n_heads=8,
         )
+
+        self.input_projection_layer = nn.Linear(258, 514)  # Project input_seq to 514
+
+        self.temporal_attention = TemporalAttention(input_dim=512, hidden_dim=256)  # Adjust dimensions as needed
 
     def forward(self, states, actions=None, train=True):
         """
@@ -186,31 +221,33 @@ class MockModel(nn.Module):
         """
         B, T, C, H, W = states.shape
 
+        # Apply masking to focus on trajectories
+        masked_states = self.apply_mask(states)  # Mask the input to focus on trajectories
+
         # Flatten states for ViT
-        states_flat = states.view(B * T, C, H, W)  # [B*T, C, H, W]
+        states_flat = masked_states.view(B * T, C, H, W)  # [B*T, C, H, W]
         encoded_states = self.vit(states_flat)  # [B*T, repr_dim]
         encoded_states = self.mlp(encoded_states)  # [B*T, final_repr_dim]
         latent_states = encoded_states.view(B, T, -1)  # [B, T, final_repr_dim]
 
-        # Normalize latent states
         latent_states = latent_states.transpose(1, 2)  # [B, final_repr_dim, T]
         latent_states = self.bn(latent_states).transpose(1, 2)  # [B, T, final_repr_dim]
 
-        # Continue with your existing predictor logic
-        # The rest of the `forward` method remains unchanged
+        # Apply temporal attention
+        attn_output, attn_weights = self.temporal_attention(latent_states)  # [B, T, final_repr_dim]
+
         if train:
-            # Prepare sequences for the predictor
-            input_seq = torch.cat([latent_states[:, :-1, :], actions], dim=-1)  # [B, T-1, final_repr_dim + 2]
+            # Use the attention-enhanced output for prediction
+            input_seq = torch.cat([attn_output[:, :-1, :], actions], dim=-1)  # [B, T-1, final_repr_dim + 2]
+            input_seq = self.input_projection_layer(input_seq)
             pred_seq = self.predictor(input_seq)  # [B, T-1, final_repr_dim + 2]
             pred_seq = pred_seq[..., :latent_states.size(-1)]  # [B, T-1, final_repr_dim]
             pred_encs = torch.cat([latent_states[:, 0:1, :], pred_seq], dim=1)  # [B, T, final_repr_dim]
             target_encs = latent_states
             return pred_encs, target_encs
         else:
-            # Inference logic (unchanged)
             if actions is None:
-                # If no actions are provided, return the latent state of the first time step
-                return latent_states[:, 0, :]
+                return latent_states[:, 0, :]  # Return the latent state of the first time step
 
             preds = [latent_states[:, 0, :]]
             cur_state = latent_states[:, 0, :].unsqueeze(1)
@@ -223,6 +260,53 @@ class MockModel(nn.Module):
             preds = torch.stack(preds, dim=1)
             return preds
 
+    def apply_mask(self, states, epoch=None, max_epochs=10):
+        """
+        Dynamically apply masking to focus on trajectories with increasing emphasis over epochs.
+        Args:
+            states: [B, T, C, H, W]
+            epoch: Current epoch (for dynamic emphasis)
+            max_epochs: Total epochs (for scaling emphasis)
+        """
+        mask = self.generate_trajectory_mask(states)  # [B, T, 1, H, W]
+        trajectory_weight = min(1.0, (epoch or 0) / max_epochs)  # Scale emphasis over epochs
+        masked_states = states * (trajectory_weight * mask + (1 - trajectory_weight) * 0.5)
+        return masked_states
+
+    def generate_trajectory_mask(self, states):
+        """
+        Generate a mask that highlights trajectories (first channel)
+        and de-emphasizes other regions (second channel).
+        
+        Args:
+            states: [B, T, C, H, W]
+        
+        Returns:
+            A mask with the same temporal and spatial dimensions as `states`.
+        """
+        B, T, C, H, W = states.shape
+
+        # Separate channels
+        object_channel = states[:, :, 0:1, :, :]  # First channel [B, T, 1, H, W]
+        env_channel = states[:, :, 1:2, :, :]  # Second channel [B, T, 1, H, W]
+
+        # Compute differences for the object channel
+        diff_object = torch.zeros_like(object_channel)  # Placeholder to match original shape
+        diff_object[:, 1:] = object_channel[:, 1:] - object_channel[:, :-1]  # [B, T, 1, H, W]
+        mask_object = (diff_object.abs() > 0.1).float()  # Threshold to detect significant changes
+
+        # Compute differences for the environment channel
+        diff_env = torch.zeros_like(env_channel)  # Placeholder to match original shape
+        diff_env[:, 1:] = env_channel[:, 1:] - env_channel[:, :-1]  # [B, T, 1, H, W]
+        mask_env = (diff_env.abs() > 0.1).float()  # Similar threshold for changes
+
+        # Combine the masks with emphasis on the object channel
+        combined_mask = 0.5 * mask_object + 0.5 * mask_env  # Weighted emphasis on the object channel
+        assert combined_mask.shape == (B, T, 1, H, W), f"Mask shape {combined_mask.shape} does not match input shape {states.shape}"
+
+        return combined_mask
+
+
     def train_model(self, dataset):
         """
         Train the model to align predicted latent representations with target representations.
@@ -230,21 +314,23 @@ class MockModel(nn.Module):
         Args:
             dataset: A PyTorch DataLoader containing the training data.
         """
-        learning_rate = 0.001
+        learning_rate = 0.0005
         num_epochs = 10     
         device = self.device   
         self.train()
 
-        optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate, weight_decay=1e-3)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=learning_rate, weight_decay=1e-5)
+        # warmup_steps = 5  
+        # scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2)
+        warmup_steps = 1000  # Number of warmup steps (experiment with values)
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer, max_lr=0.001, total_steps=num_epochs * len(dataset), anneal_strategy='linear')
 
-        # Warmup and cosine annealing with restarts
-        warmup_steps = 5  # Number of warmup epochs
-        scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2)
         print(f"Starting model training for {num_epochs} epochs with lr={learning_rate}...")
 
         early_stopping = EarlyStopping(patience=10, delta=1e-4)
         epoch_losses = []
-        vicreg_loss_fn = VICRegLoss(lambda_invariance=10, mu_variance=5, nu_covariance=0.01)
+        vicreg_loss_fn = VICRegLoss(lambda_invariance=15, mu_variance=5, nu_covariance=0.01)
 
         for epoch in tqdm(range(num_epochs), desc="Model training epochs"):
             batch_losses = []  # Track losses per batch
@@ -255,7 +341,7 @@ class MockModel(nn.Module):
                 pred_encs, target_encs = self.forward(states=states, actions=actions, train=True)
 
                 # # Visualize latent states every few epochs
-                if epoch % 2 == 0 and batch_idx == 0:  # For first batch every 2 epochs
+                if batch_idx == 0:  
                     print(f"[Train Debug] Visualizing latent states at epoch {epoch}")
                     print(f"Type of pred_encs: {type(pred_encs)}")  # Ensure it's a tensor
                     visualize_latent_states(target_encs,f'target: {epoch}')
@@ -269,11 +355,11 @@ class MockModel(nn.Module):
                 torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=5.0)
                 optimizer.step()
 
-                batch_losses.append(loss.item())  # Append batch loss
+                batch_losses.append(loss.item())
 
-                for name, param in self.named_parameters():
-                    if param.grad is not None:
-                        print(f"{name}: Grad mean {param.grad.mean():.4f}, Grad max {param.grad.abs().max():.4f}")
+                # for name, param in self.named_parameters():
+                #     if param.grad is not None:
+                #         print(f"{name}: Grad mean {param.grad.mean():.4f}, Grad max {param.grad.abs().max():.4f}")
 
             avg_epoch_loss = sum(batch_losses) / len(batch_losses)  # Average epoch loss
             epoch_losses.append(avg_epoch_loss)
@@ -282,18 +368,14 @@ class MockModel(nn.Module):
             latent_var = torch.var(pred_encs.view(-1, pred_encs.size(-1)), dim=0)
             print(f"Epoch {epoch + 1}: Latent variance mean: {latent_var.mean().item():.4f}")
 
-             # Step the scheduler
             scheduler.step()
 
-            # Check early stopping
             early_stopping(avg_epoch_loss)
             if early_stopping.early_stop:
                 print(f"Early stopping triggered after epoch {epoch + 1}")
                 break
 
         print("Model training complete.")
-
-
 
 class Prober(torch.nn.Module):
     def __init__(

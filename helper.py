@@ -1,3 +1,4 @@
+
 from typing import List
 import numpy as np
 from torch import nn
@@ -6,6 +7,7 @@ import torch
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 import matplotlib
+
 
 class VICRegLoss(nn.Module):
     def __init__(self, lambda_invariance=25, mu_variance=25, nu_covariance=1):
@@ -41,7 +43,8 @@ class VICRegLoss(nn.Module):
             self.nu_covariance * covariance_loss
         )
         return total_loss
-    
+
+
 def adjust_learning_rate(optimizer, epoch, warmup_steps, base_lr):
     if epoch < warmup_steps:
         lr = base_lr * (epoch + 1) / warmup_steps
@@ -71,7 +74,7 @@ class EarlyStopping:
         else:
             self.counter += 1
             if self.counter >= self.patience:
-                self.early_stop = True
+                self.early_stop = True  
 
 def visualize_latent_states(latent_states, title):
             """
@@ -113,3 +116,5 @@ def initialize_weights(module):
                 nn.init.xavier_uniform_(param)
             elif "bias" in name:
                 nn.init.constant_(param, 0)
+
+

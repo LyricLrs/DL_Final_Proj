@@ -44,7 +44,10 @@ def load_data(device):
 def load_model():
     """Load or initialize the model."""
     # TODO: Replace MockModel with your trained model
-    model = MockModel()
+    model = MockModel(device="cuda").to("cuda")
+    probe_train_ds, probe_val_ds = load_data(device="cuda")
+    model.train_model(dataset=probe_train_ds)
+
     return model
 
 
