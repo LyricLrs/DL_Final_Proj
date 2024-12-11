@@ -120,10 +120,35 @@ class ProbingEvaluator:
                 pred_encs = model(states=init_states, actions=batch.actions.to(self.device), train=False)
                 pred_encs = pred_encs.transpose(0, 1)  # Append the latent state [B, repr_dim]
 
+                # Normalize latent states
+                pred_encs = F.normalize(pred_encs, p=2, dim=-1)
+
+                # Compute temporal smoothness
+                temporal_smoothness = torch.norm(pred_encs[1:] - pred_encs[:-1], dim=-1).mean()
+
+                # (Optional) Compute pairwise distance for regularization
+                pairwise_distance = torch.cdist(pred_encs, pred_encs, p=2).mean()
+
                 # init_states = batch.states[:, 0:1]  # [B, 1, C, H, W]
                 # pred_encs, target_encs = model(states=batch.states, actions=batch.actions, train=True)
                 # Make sure pred_encs has shape (T, BS, D) at this point
                 ################################################################################
+
+                # Analyze variance
+                latent_var = torch.var(pred_encs.reshape(-1, pred_encs.size(-1)), dim=0)
+                print(f"Latent variance (mean): {latent_var.mean().item():.4f}, (max): {latent_var.max().item():.4f}")
+
+                # Analyze covariance
+                cov_matrix = torch.mm(pred_encs[0].T, pred_encs[0])
+                off_diag = cov_matrix - torch.diag(torch.diag(cov_matrix))
+                cov_loss = off_diag.pow(2).sum()
+                print(f"Covariance loss (off-diagonal sum): {cov_loss.item():.4f}")
+
+                # Debug pairwise distance
+                print(f"Pairwise distance of latent states: {pairwise_distance.item():.4f}")
+
+                # Debug temporal smoothness
+                print(f"Temporal smoothness regularization: {temporal_smoothness.item():.4f}")
 
                 pred_encs = pred_encs.detach()
 
@@ -219,6 +244,8 @@ class ProbingEvaluator:
             # Initialize latent state using the initial state
             init_states = batch.states[:, 0:1]  # BS, 1 C, H, W
             pred_encs = model(states=init_states, actions=batch.actions, train=False)
+
+            pred_encs = F.normalize(pred_encs, p=2, dim=-1)
             # # BS, T, D --> T, BS, D
             pred_encs = pred_encs.transpose(0, 1)
 

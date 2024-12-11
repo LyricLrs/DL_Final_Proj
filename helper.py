@@ -11,7 +11,7 @@ import random
 from PIL import Image, ImageFilter, ImageEnhance
 
 class VICRegLoss(nn.Module):
-    def __init__(self, lambda_invariance=25, mu_variance=25, nu_covariance=1, gamma_inverse_log=1):
+    def __init__(self, lambda_invariance=25, mu_variance=50, nu_covariance=0.01, gamma_inverse_log=10):
         super().__init__()
         self.lambda_invariance = lambda_invariance
         self.mu_variance = mu_variance
@@ -51,7 +51,11 @@ class VICRegLoss(nn.Module):
             + self.gamma_inverse_log * inverse_log_loss
         )
 
-        print(f"Invariance loss: {invariance_loss.item():.4f}, Variance loss: {variance_loss.item():.4f}, Covariance loss: {covariance_loss.item():.4f}, Inverse log loss: {inverse_log_loss.item():.4f}")
+        # print(f"Invariance loss: {invariance_loss.item() * self.lambda_invariance:.4f}, \
+        # Variance loss: {variance_loss.item() * self.mu_variance:.4f}, \
+        # Covariance loss: {covariance_loss.item() * self.nu_covariance:.4f}, \
+        # Inverse log loss: {inverse_log_loss.item() * self.gamma_inverse_log:.4f}")
+
         return total_loss
       
 
@@ -156,29 +160,29 @@ class EarlyStopping:
                 self.early_stop = True  
 
 def visualize_latent_states(latent_states, title):
-            """
-            Visualize latent states using PCA.
+    """
+    Visualize latent states using PCA.
 
-            Args:
-                latent_states (torch.Tensor): The latent states tensor of shape [B, T, D].
-                title (str): Title for the PCA plot.
-            """
-            latent_states = latent_states.reshape(-1, latent_states.shape[-1]).cpu().detach().numpy() 
+    Args:
+        latent_states (torch.Tensor): The latent states tensor of shape [B, T, D].
+        title (str): Title for the PCA plot.
+    """
+    latent_states = latent_states.reshape(-1, latent_states.shape[-1]).cpu().detach().numpy() 
 
-            print(f"[Visualize] Final shape for PCA: {latent_states.shape}") 
+    print(f"[Visualize] Final shape for PCA: {latent_states.shape}") 
 
-            pca = PCA(n_components=2)
-            latent_2d = pca.fit_transform(latent_states)
+    pca = PCA(n_components=2)
+    latent_2d = pca.fit_transform(latent_states)
 
-            plt.figure(figsize=(8, 6))
-            plt.scatter(latent_2d[:, 0], latent_2d[:, 1], alpha=0.5, label="Latent States")
-            plt.title(title)
-            plt.xlabel("PCA Dimension 1")
-            plt.ylabel("PCA Dimension 2")
-            plt.legend()
-            plt.grid(True)
-            plt.savefig(f"latent_states_epoch_{title}.png") 
-            plt.close()
+    plt.figure(figsize=(8, 6))
+    plt.scatter(latent_2d[:, 0], latent_2d[:, 1], alpha=0.5, label="Latent States")
+    plt.title(title)
+    plt.xlabel("PCA Dimension 1")
+    plt.ylabel("PCA Dimension 2")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(f"latent_states_epoch_{title}.png") 
+    plt.close()
 
 def initialize_weights(module):
     if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):

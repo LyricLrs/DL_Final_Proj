@@ -156,25 +156,6 @@ class TemporalAttention(nn.Module):
 
         return output, attn_weights
 
-class CustomDataset(torch.utils.data.Dataset):
-    def __init__(self, data, labels, transform=None):
-        self.data = data  # List of images
-        self.labels = labels  # Corresponding labels
-        self.transform = transform
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        img = self.data[idx]  # Retrieve the image
-        label = self.labels[idx]  # Retrieve the label
-
-        # Apply the transform pipeline if specified
-        if self.transform:
-            img = apply_transforms(img, self.transform)
-
-        return img, label
-
 class MockModel(nn.Module):
     def __init__(self, device="cuda", bs=64, n_steps=17, output_dim=None):
         super().__init__()
@@ -185,7 +166,7 @@ class MockModel(nn.Module):
             img_size=64,  
             patch_size=8,  
             in_chans=2,  
-            embed_dim=512,  
+            embed_dim=256,  
             depth=8, 
             num_heads=8,  
             mlp_ratio=4.0, 
@@ -193,23 +174,23 @@ class MockModel(nn.Module):
             attn_drop_rate=0.1,  
         )
 
-        self.repr_dim = 512
+        self.repr_dim = 256
 
-        self.mlp = build_mlp([self.repr_dim, 512, 512])
+        self.mlp = build_mlp([self.repr_dim, 256, 256])
 
-        final_repr_dim = 512
+        final_repr_dim = 256
         self.bn = nn.BatchNorm1d(final_repr_dim)
 
         self.predictor = TransformerPredictor(
             input_dim=final_repr_dim + 2,
-            hidden_dim=512,
+            hidden_dim=256,
             num_layers=4,
             n_heads=8,
         )
 
-        self.input_projection_layer = nn.Linear(258, 514) 
+        self.input_projection_layer = nn.Linear(130, 258) 
 
-        self.temporal_attention = TemporalAttention(input_dim=512, hidden_dim=256) 
+        self.temporal_attention = TemporalAttention(input_dim=256, hidden_dim=128) 
 
     def forward(self, states, actions=None, train=True):
         """
@@ -223,7 +204,6 @@ class MockModel(nn.Module):
         # masked_states = self.apply_mask(states)  # Masking temporarily disabled
         masked_states = states  # Directly use the raw states
 
-        # Flatten states for ViT
         states_flat = masked_states.view(B * T, C, H, W)  # [B*T, C, H, W]
         encoded_states = self.vit(states_flat)  # [B*T, repr_dim]
         encoded_states = self.mlp(encoded_states)  # [B*T, final_repr_dim]
@@ -246,7 +226,7 @@ class MockModel(nn.Module):
             return pred_encs, target_encs
         else:
             if actions is None:
-                return latent_states[:, 0, :]  # Return the latent state of the first time step
+                return latent_states[:, 0, :]  
 
             preds = [latent_states[:, 0, :]]
             cur_state = latent_states[:, 0, :].unsqueeze(1)
@@ -267,8 +247,8 @@ class MockModel(nn.Module):
             epoch: Current epoch (for dynamic emphasis)
             max_epochs: Total epochs (for scaling emphasis)
         """
-        mask = self.generate_trajectory_mask(states)  # [B, T, 1, H, W]
-        trajectory_weight = min(1.0, (epoch or 0) / max_epochs)  # Scale emphasis over epochs
+        mask = self.generate_trajectory_mask(states)  
+        trajectory_weight = min(1.0, (epoch or 0) / max_epochs) 
         masked_states = states * (trajectory_weight * mask + (1 - trajectory_weight) * 0.5)
         return states
 
@@ -285,6 +265,7 @@ class MockModel(nn.Module):
         """
         B, T, C, H, W = states.shape
 
+        # Separate channels
         object_channel = states[:, :, 0:1, :, :]  # First channel [B, T, 1, H, W]
         env_channel = states[:, :, 1:2, :, :]  # Second channel [B, T, 1, H, W]
 
@@ -328,12 +309,8 @@ class MockModel(nn.Module):
 
         early_stopping = EarlyStopping(patience=10, delta=1e-4)
         epoch_losses = []
-        vicreg_loss_fn = VICRegLoss(
-            lambda_invariance=25.0,
-            mu_variance=15.0,
-            nu_covariance=0.01,
-            gamma_inverse_log=10.0  # Adjust weight for inverse log term
-        )
+        vicreg_loss_fn = VICRegLoss()
+
 
         for epoch in tqdm(range(num_epochs), desc="Model training epochs"):
             batch_losses = []  # Track losses per batch
@@ -349,6 +326,7 @@ class MockModel(nn.Module):
                     print(f"Type of pred_encs: {type(pred_encs)}")  # Ensure it's a tensor
                     visualize_latent_states(target_encs,f'target: {epoch}')
                     visualize_latent_states(pred_encs,f'pred: {epoch}')
+
 
                 #loss = torch.nn.functional.mse_loss(pred_encs, target_encs)
                 loss = vicreg_loss_fn(pred_encs, target_encs)
