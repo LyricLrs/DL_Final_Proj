@@ -10,9 +10,6 @@ from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 import matplotlib
 from helper import *
-#from vit import VisionTransformer
-
-torch.cuda.empty_cache()
 
 def build_mlp(layers_dims: List[int]):
     layers = []
@@ -56,36 +53,29 @@ class TransformerPredictor(nn.Module):
 class VisionTransformer(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4.0, drop_rate=0.0, attn_drop_rate=0.0):
         super().__init__()
-        # 1. Patch embedding
         self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
 
-        # 2. Class token & Positional embeddings
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, 1 + self.patch_embed.num_patches, embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
 
-        # 3. Transformer encoder layers
         self.blocks = nn.ModuleList([
             Block(embed_dim, num_heads, mlp_ratio, drop=drop_rate, attn_drop=attn_drop_rate)
             for _ in range(depth)
         ])
         self.norm = nn.LayerNorm(embed_dim)
 
-        # Initialize weights (like timm does)
         self._init_weights()
 
     def _init_weights(self):
-        # Implement appropriate weight initialization
         pass
 
     def forward(self, x):
-        # x: [B, C, H, W]
-        x = self.patch_embed(x) # [B, num_patches, embed_dim]
+        x = self.patch_embed(x)
         B, N, D = x.shape
 
-        # Add class token
-        cls_tokens = self.cls_token.expand(B, -1, -1)  # [B, 1, D]
-        x = torch.cat((cls_tokens, x), dim=1)  # [B, 1+N, D]
+        cls_tokens = self.cls_token.expand(B, -1, -1)  
+        x = torch.cat((cls_tokens, x), dim=1)  
         x = x + self.pos_embed
         x = self.pos_drop(x)
 
@@ -93,7 +83,6 @@ class VisionTransformer(nn.Module):
             x = blk(x)
 
         x = self.norm(x)
-        # Return the CLS token as representation
         return x[:, 0]
 
 class PatchEmbed(nn.Module):
@@ -105,9 +94,8 @@ class PatchEmbed(nn.Module):
         self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
 
     def forward(self, x):
-        # x: [B, C, H, W]
-        x = self.proj(x)  # [B, embed_dim, H/patch, W/patch]
-        x = x.flatten(2).transpose(1, 2)  # [B, num_patches, embed_dim]
+        x = self.proj(x)  
+        x = x.flatten(2).transpose(1, 2) 
         return x
 
 class Block(nn.Module):
@@ -128,10 +116,8 @@ class Block(nn.Module):
         )
 
     def forward(self, x):
-        # x: [B, N, D]
         x_res = x
         x = self.norm1(x)
-        # MultiheadAttention expects [B, N, D], batch_first=True supports this directly
         x_attn, _ = self.attn(x, x, x)
         x = x_res + self.drop_path(x_attn)
 
@@ -143,7 +129,7 @@ class Block(nn.Module):
 class TemporalAttention(nn.Module):
     def __init__(self, input_dim, hidden_dim, dropout=0.1):
         super().__init__()
-        # Learnable query, key, and value projections
+
         self.query_proj = nn.Linear(input_dim, hidden_dim)
         self.key_proj = nn.Linear(input_dim, hidden_dim)
         self.value_proj = nn.Linear(input_dim, hidden_dim)
@@ -158,19 +144,36 @@ class TemporalAttention(nn.Module):
             output: [B, T, D] - Attention-enhanced latent states
             weights: [B, T, T] - Attention weights for each time step
         """
-        query = self.query_proj(x)  # [B, T, hidden_dim]
-        key = self.key_proj(x)     # [B, T, hidden_dim]
-        value = self.value_proj(x) # [B, T, hidden_dim]
+        query = self.query_proj(x)  
+        key = self.key_proj(x)     
+        value = self.value_proj(x) 
 
-        # Compute attention scores
-        attn_scores = torch.matmul(query, key.transpose(-2, -1)) / (key.size(-1) ** 0.5)  # [B, T, T]
-        attn_weights = self.softmax(attn_scores)  # [B, T, T]
+        attn_scores = torch.matmul(query, key.transpose(-2, -1)) / (key.size(-1) ** 0.5)  
+        attn_weights = self.softmax(attn_scores) 
 
-        # Apply attention weights
-        weighted_values = torch.matmul(attn_weights, value)  # [B, T, hidden_dim]
+        weighted_values = torch.matmul(attn_weights, value) 
         output = self.dropout(weighted_values)
 
         return output, attn_weights
+
+class CustomDataset(torch.utils.data.Dataset):
+    def __init__(self, data, labels, transform=None):
+        self.data = data  # List of images
+        self.labels = labels  # Corresponding labels
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        img = self.data[idx]  # Retrieve the image
+        label = self.labels[idx]  # Retrieve the label
+
+        # Apply the transform pipeline if specified
+        if self.transform:
+            img = apply_transforms(img, self.transform)
+
+        return img, label
 
 class MockModel(nn.Module):
     def __init__(self, device="cuda", bs=64, n_steps=17, output_dim=None):
@@ -178,30 +181,25 @@ class MockModel(nn.Module):
         self.device = device
         self.n_steps = n_steps
 
-        # Vision Transformer as the encoder
         self.vit = VisionTransformer(
-            img_size=64,  # Adjust to your input size
-            patch_size=8,  # Size of each patch
-            in_chans=2,  # Number of channels in your input
-            embed_dim=512,  # Embedding dimension
-            depth=8,  # Number of transformer layers
-            num_heads=8,  # Number of attention heads
-            mlp_ratio=4.0,  # MLP expansion ratio
-            drop_rate=0.1,  # Dropout rate
-            attn_drop_rate=0.1,  # Attention dropout rate
+            img_size=64,  
+            patch_size=8,  
+            in_chans=2,  
+            embed_dim=512,  
+            depth=8, 
+            num_heads=8,  
+            mlp_ratio=4.0, 
+            drop_rate=0.1,  
+            attn_drop_rate=0.1,  
         )
 
-        # ViT embedding dimension
         self.repr_dim = 512
 
-        # MLP after ViT if needed
         self.mlp = build_mlp([self.repr_dim, 512, 512])
 
-        # BatchNorm and predictor
         final_repr_dim = 512
         self.bn = nn.BatchNorm1d(final_repr_dim)
 
-        # Predictor: input dimension is final_repr_dim + 2 (for actions)
         self.predictor = TransformerPredictor(
             input_dim=final_repr_dim + 2,
             hidden_dim=512,
@@ -209,9 +207,9 @@ class MockModel(nn.Module):
             n_heads=8,
         )
 
-        self.input_projection_layer = nn.Linear(258, 514)  # Project input_seq to 514
+        self.input_projection_layer = nn.Linear(258, 514) 
 
-        self.temporal_attention = TemporalAttention(input_dim=512, hidden_dim=256)  # Adjust dimensions as needed
+        self.temporal_attention = TemporalAttention(input_dim=512, hidden_dim=256) 
 
     def forward(self, states, actions=None, train=True):
         """
@@ -221,8 +219,9 @@ class MockModel(nn.Module):
         """
         B, T, C, H, W = states.shape
 
-        # Apply masking to focus on trajectories
-        masked_states = self.apply_mask(states)  # Mask the input to focus on trajectories
+        # Use raw states (skip masking)
+        # masked_states = self.apply_mask(states)  # Masking temporarily disabled
+        masked_states = states  # Directly use the raw states
 
         # Flatten states for ViT
         states_flat = masked_states.view(B * T, C, H, W)  # [B*T, C, H, W]
@@ -271,7 +270,7 @@ class MockModel(nn.Module):
         mask = self.generate_trajectory_mask(states)  # [B, T, 1, H, W]
         trajectory_weight = min(1.0, (epoch or 0) / max_epochs)  # Scale emphasis over epochs
         masked_states = states * (trajectory_weight * mask + (1 - trajectory_weight) * 0.5)
-        return masked_states
+        return states
 
     def generate_trajectory_mask(self, states):
         """
@@ -330,7 +329,12 @@ class MockModel(nn.Module):
 
         early_stopping = EarlyStopping(patience=10, delta=1e-4)
         epoch_losses = []
-        vicreg_loss_fn = VICRegLoss(lambda_invariance=15, mu_variance=5, nu_covariance=0.01)
+        vicreg_loss_fn = VICRegLoss(
+            lambda_invariance=25.0,
+            mu_variance=15.0,
+            nu_covariance=0.01,
+            gamma_inverse_log=10.0  # Adjust weight for inverse log term
+        )
 
         for epoch in tqdm(range(num_epochs), desc="Model training epochs"):
             batch_losses = []  # Track losses per batch
