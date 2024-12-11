@@ -285,7 +285,6 @@ class MockModel(nn.Module):
         """
         B, T, C, H, W = states.shape
 
-        # Separate channels
         object_channel = states[:, :, 0:1, :, :]  # First channel [B, T, 1, H, W]
         env_channel = states[:, :, 1:2, :, :]  # Second channel [B, T, 1, H, W]
 
