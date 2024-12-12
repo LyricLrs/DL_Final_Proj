@@ -40,13 +40,24 @@ def load_data(device):
 
     return probe_train_ds, probe_val_ds
 
+def load_train_data(device):
+    data_path = "/scratch/DL24FA"
+
+    train_ds = create_wall_dataloader(
+        data_path=f"{data_path}/train",
+        probing=False,
+        device=device,
+        train=True,
+    )
+
+    return train_ds
 
 def load_model():
     """Load or initialize the model."""
     # TODO: Replace MockModel with your trained model
     model = MockModel(device="cuda").to("cuda")
-    probe_train_ds, probe_val_ds = load_data(device="cuda")
-    model.train_model(dataset=probe_train_ds)
+    train = load_train_data(device="cuda")
+    model.train_model(dataset=train)
 
     return model
 
