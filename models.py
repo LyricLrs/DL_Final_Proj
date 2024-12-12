@@ -2,13 +2,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 from typing import List
-from tqdm import tqdm  # Correct the import
+from tqdm import tqdm
 import torch.optim as optim
 from dataset import create_wall_dataloader
 import torchvision.models as models
 
 from transformers import ViTConfig, ViTModel
-from loss import VICRegLoss
+from loss import VICRegLoss, BarlowTwinsLoss
 
 
 # Define a simple MLP architecture for testing purposes
@@ -35,7 +35,7 @@ class MockModel(nn.Module):
         self.repr_dim = output_dim  # 256-dimensional latent space
         
         # Resnet 18
-        self.encoder = models.resnet18()
+        self.encoder = models.resnet34()
 
         # increase feature map
         self.encoder.conv1 = nn.Conv2d(
@@ -48,14 +48,12 @@ class MockModel(nn.Module):
             bias=True
         )
         self.encoder.maxpool = nn.MaxPool2d(kernel_size=3, stride=1, padding=1, dilation=1, ceil_mode=False)
-        self.encoder.fc = nn.Linear(self.encoder.fc.in_features, 256)
-        
-        self.lstm = nn.LSTM(
-            input_size=258, 
-            hidden_size=256,
-            num_layers=1, 
-            bidirectional=False,
-            batch_first=True
+        self.encoder.fc = nn.Linear(self.encoder.fc.in_features, self.repr_dim)
+
+        self.predictor = nn.Sequential(
+            nn.Linear(self.repr_dim + 2, 256),
+            nn.ReLU(),
+            nn.Linear(256, self.repr_dim)
         )
 
 
@@ -85,10 +83,23 @@ class MockModel(nn.Module):
             # latent_states -- (64, 17, D)
             # actions -- (64, 16, 2)
             # predictions -- (64, 16, D)
-            # input_to_predictor -- (64, 16, D+2)
-            input_to_predictor = torch.cat([latent_states[:, :-1, :], actions], dim=-1)
-            predictions, (hn, cn) = self.lstm(input_to_predictor)
-            # print("prediction shape:", predictions.shape)
+
+            # Predict at each time step t:
+            # input_to_predictor -- (64, D+2)
+            # predicted_latent_state -- (64, D)
+
+            predicted_latents = []
+
+            for t in range(T - 1):
+                # Concatenate latent state and action at time step t
+                input_to_predictor = torch.cat([latent_states[:, t, :], actions[:, t, :]], dim=-1)
+                
+                # Predict the next latent state using the predictor
+                predicted_latent_state = self.predictor(input_to_predictor)
+                predicted_latents.append(predicted_latent_state)
+
+            # Stack the predicted latents
+            predictions = torch.stack(predicted_latents, dim=1)
 
             return predictions, latent_states
 
@@ -105,11 +116,10 @@ class MockModel(nn.Module):
                     predictions.append(latent_state)
                 else:
                     # Predict the next state using the previous state and action
-                    input_to_predictor = torch.cat([latent_state.unsqueeze(1), actions[:, t-1, :].unsqueeze(1)], dim=-1)
+                    input_to_predictor = torch.cat([latent_state, actions[:, t-1, :]], dim=-1)
 
-                    predicted_state, _ = self.lstm(input_to_predictor)
-                    latent_state = predicted_state.squeeze(1)
-                    predictions.append(latent_state)
+                    predicted_state = self.predictor(input_to_predictor)
+                    predictions.append(predicted_state)
 
             predictions = torch.stack(predictions, dim=1)
 
@@ -121,26 +131,31 @@ class MockModel(nn.Module):
         """
         Train the model.
         """
-        learning_rate = 0.001
+        learning_rate = 0.001       # could try smaller lr like 0.0002 & consine lr scheduler
         num_epochs = 5
         device = self.device
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate, weight_decay=1e-5)
+        
         vicreg_loss_fn = VICRegLoss()
+        barlow_twins_loss_fn = BarlowTwinsLoss(device=device, lambda_param=5e-3)
 
         print(f"Training for {num_epochs} epochs with lr={learning_rate}...")
 
-        for epoch in tqdm(range(num_epochs), desc="Epochs"):  # Use tqdm correctly
+        for epoch in tqdm(range(num_epochs), desc="Epochs"):
             epoch_loss = 0
 
             for batch in tqdm(dataset, desc="Training step"):
                 states, locations, actions = batch
-                states = states.to(device)  # Extract initial states
+                states = states.to(device)
                 actions = actions.to(device)
 
                 pred_encs, target_encs = self.forward(states=states, actions=actions, train=True)
 
+                # print("shape of pred_encs:", pred_encs.shape)
+                # print("shape of target_encs:", target_encs[:, 1:, :].shape)
+
                 # loss = torch.nn.functional.mse_loss(pred_encs, target_encs[:, 1:, :])
-                loss = vicreg_loss_fn(pred_encs, target_encs[:, 1:, :])
+                loss = barlow_twins_loss_fn(pred_encs, target_encs[:, 1:, :])
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -153,7 +168,7 @@ class MockModel(nn.Module):
             print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f}")
 
             # Save model for the epoch
-            model_save_path = f"models/resnet18_epoch{epoch+1}_loss{avg_loss:.4f}.pth"
+            model_save_path = f"models/resnet34_epoch{epoch+1}_loss{avg_loss:.4f}.pth"
             torch.save(model.state_dict(), model_save_path)
             print(f"Model saved to {model_save_path}")
 
@@ -193,13 +208,19 @@ def load_data(device):
         probing=False,
         device=device,
         train=True,
+        batch_size=56       # reduce bs to avoid OOM
     )
     return train_ds
 
+
 if __name__ == "__main__":
 
-    model = MockModel(device="cuda", bs=64, n_steps=17, output_dim=256)
+    model = MockModel(device="cuda", bs=56, n_steps=17, output_dim=256)
     model = model.to("cuda")
+
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Total Parameters: {total_params}")
+
     train_ds = load_data(device="cuda")
 
     model.train_model(dataset=train_ds)

@@ -51,14 +51,14 @@ def load_model():
     # TODO: Replace MockModel with your trained model
     model = MockModel()
 
-    model_path = "models/resnet18_epoch5_loss49.8044.pth"
+    model_path = "models/resnet34_epoch5_loss2.8255.pth"
     checkpoint = torch.load(model_path, map_location=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
     model.load_state_dict(checkpoint)
     model = model.to("cuda" if torch.cuda.is_available() else "cpu")
     model.eval()
 
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"Total Parameters: {total_params}")
+    # total_params = sum(p.numel() for p in model.parameters())
+    # print(f"Total Parameters: {total_params}")
 
     return model
 
