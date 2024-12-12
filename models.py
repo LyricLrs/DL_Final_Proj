@@ -5,6 +5,7 @@ from typing import List
 from tqdm import tqdm  # Correct the import
 import torch.optim as optim
 from dataset import create_wall_dataloader
+import torchvision.models as models
 
 from transformers import ViTConfig, ViTModel
 from loss import VICRegLoss
@@ -33,29 +34,29 @@ class MockModel(nn.Module):
         self.n_steps = n_steps
         self.repr_dim = output_dim  # 256-dimensional latent space
         
-        # Define CNN layers
-        # self.cnn = nn.Sequential(
-        #     nn.Conv2d(2, 32, kernel_size=3, stride=1, padding=1),
-        #     nn.ReLU(),
-        #     nn.MaxPool2d(2),
-        #     nn.Dropout(0.3),  # Dropout with 30%
-        #     nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-        #     nn.ReLU(),
-        #     nn.MaxPool2d(2),
-        #     nn.Flatten(),
-        # )
-        config = ViTConfig(
-            image_size=65,
-            patch_size=4,
-            num_channels=2
+        # Resnet 18
+        self.encoder = models.resnet18()
+
+        # increase feature map
+        self.encoder.conv1 = nn.Conv2d(
+            in_channels=2, 
+            out_channels=self.encoder.conv1.out_channels, 
+            kernel_size=self.encoder.conv1.kernel_size, 
+            # stride=self.encoder.conv1.stride,
+            stride=(1, 1),
+            padding=self.encoder.conv1.padding, 
+            bias=True
         )
-
-        self.vit = ViTModel(config=config)
-
-        self.fc = nn.Linear(257 * 768, self.repr_dim)  # Output is 256-dimensional
-
-        # GRU layer for sequential prediction
-        self.predictor = nn.GRU(input_size=self.repr_dim + 2, hidden_size=self.repr_dim, batch_first=True)
+        self.encoder.maxpool = nn.MaxPool2d(kernel_size=3, stride=1, padding=1, dilation=1, ceil_mode=False)
+        self.encoder.fc = nn.Linear(self.encoder.fc.in_features, 256)
+        
+        self.lstm = nn.LSTM(
+            input_size=258, 
+            hidden_size=256,
+            num_layers=1, 
+            bidirectional=False,
+            batch_first=True
+        )
 
 
     def forward(self, states, actions, train=False):
@@ -75,27 +76,45 @@ class MockModel(nn.Module):
 
         if train:
             states_flat = states.view(B * T, C, H, W)
-            # print("states shape before reshaping:", states_flat.shape)
-            encoded_states = self.vit(states_flat).last_hidden_state
+            # print("states shape after reshaping:", states_flat.shape)
+            encoded_states = self.encoder(states_flat)
+            # print("states shape after encoder:", encoded_states.shape)
+            latent_states = encoded_states.view(B, T, -1)
+            # print("latent states shape:", latent_states.shape)
 
-            # print("states shape before reshaping:", encoded_states.shape)
-            latent_states = self.fc(encoded_states.view(B, -1)).view(B, T, -1)
+            # latent_states -- (64, 17, D)
+            # actions -- (64, 16, 2)
+            # predictions -- (64, 16, D)
+            # input_to_predictor -- (64, 16, D+2)
+            input_to_predictor = torch.cat([latent_states[:, :-1, :], actions], dim=-1)
+            predictions, (hn, cn) = self.lstm(input_to_predictor)
+            # print("prediction shape:", predictions.shape)
+
+            return predictions, latent_states
+
+
         else:
+            # Inference logic
             init_state = states[:, 0, :, :, :]
-            encoded_init = self.vit(init_state.view(B, C, H, W)).last_hidden_state
-            latent_states = self.fc(encoded_init.view(B, -1)).unsqueeze(1)
-            
+            encoded_init = self.encoder(init_state.view(B, C, H, W))
+            latent_state = encoded_init.view(B, -1)
+            predictions = []
 
-        predictions = [latent_states[:, 0, :]]  # Start predictions with the first latent state
+            for t in range(actions.shape[1] + 1):
+                if t == 0:
+                    predictions.append(latent_state)
+                else:
+                    # Predict the next state using the previous state and action
+                    input_to_predictor = torch.cat([latent_state.unsqueeze(1), actions[:, t-1, :].unsqueeze(1)], dim=-1)
 
-        for t in range(actions.shape[1]):
-            action = actions[:, t, :].unsqueeze(1)
-            input_to_predictor = torch.cat([predictions[-1].unsqueeze(1), action], dim=-1)
-            output, _ = self.predictor(input_to_predictor)
-            predictions.append(output.squeeze(1))
+                    predicted_state, _ = self.lstm(input_to_predictor)
+                    latent_state = predicted_state.squeeze(1)
+                    predictions.append(latent_state)
 
-        predictions = torch.stack(predictions, dim=1)  # [B, T, repr_dim]
-        return predictions if not train else (predictions, latent_states)
+            predictions = torch.stack(predictions, dim=1)
+
+        return predictions
+
 
 
     def train_model(self, dataset):
@@ -115,13 +134,13 @@ class MockModel(nn.Module):
 
             for batch in tqdm(dataset, desc="Training step"):
                 states, locations, actions = batch
-                init_states = states[:, 0:1].to(device)  # Extract initial states
+                states = states.to(device)  # Extract initial states
                 actions = actions.to(device)
 
-                pred_encs, target_encs = self.forward(states=init_states, actions=actions, train=True)
+                pred_encs, target_encs = self.forward(states=states, actions=actions, train=True)
 
-                # loss = torch.nn.functional.mse_loss(pred_encs, target_encs)
-                loss = vicreg_loss_fn(pred_encs, target_encs)
+                # loss = torch.nn.functional.mse_loss(pred_encs, target_encs[:, 1:, :])
+                loss = vicreg_loss_fn(pred_encs, target_encs[:, 1:, :])
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -134,22 +153,11 @@ class MockModel(nn.Module):
             print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f}")
 
             # Save model for the epoch
-            model_save_path = f"models/vit_epoch{epoch+1}_loss{avg_loss:.4f}.pth"
+            model_save_path = f"models/resnet18_epoch{epoch+1}_loss{avg_loss:.4f}.pth"
             torch.save(model.state_dict(), model_save_path)
             print(f"Model saved to {model_save_path}")
 
         print("Training complete.")
-
-
-def load_data(device):
-    data_path = "/scratch/DL24FA"
-    train_ds = create_wall_dataloader(
-        data_path=f"{data_path}/train",
-        probing=False,
-        device=device,
-        train=True,
-    )
-    return train_ds
 
 
 class Prober(torch.nn.Module):
@@ -178,11 +186,20 @@ class Prober(torch.nn.Module):
         return output
 
 
+def load_data(device):
+    data_path = "/scratch/DL24FA"
+    train_ds = create_wall_dataloader(
+        data_path=f"{data_path}/train",
+        probing=False,
+        device=device,
+        train=True,
+    )
+    return train_ds
 
-# if __name__ == "__main__":
+if __name__ == "__main__":
 
-#     model = MockModel(device="cuda", bs=64, n_steps=17, output_dim=256)
-#     model = model.to("cuda")
-#     train_ds = load_data(device="cuda")
+    model = MockModel(device="cuda", bs=64, n_steps=17, output_dim=256)
+    model = model.to("cuda")
+    train_ds = load_data(device="cuda")
 
-#     model.train_model(dataset=train_ds)
+    model.train_model(dataset=train_ds)
