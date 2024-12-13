@@ -35,7 +35,7 @@ class MockModel(nn.Module):
         self.repr_dim = output_dim  # 256-dimensional latent space
         
         # Resnet 18
-        self.encoder = models.resnet34()
+        self.encoder = models.resnet18()
 
         # increase feature map
         self.encoder.conv1 = nn.Conv2d(
@@ -48,13 +48,22 @@ class MockModel(nn.Module):
             bias=True
         )
         self.encoder.maxpool = nn.MaxPool2d(kernel_size=3, stride=1, padding=1, dilation=1, ceil_mode=False)
-        self.encoder.fc = nn.Linear(self.encoder.fc.in_features, self.repr_dim)
 
+        self.layer1 = self.encoder.layer1
+        self.layer2 = self.encoder.layer2
+        self.encoder.avgpool = nn.AdaptiveAvgPool2d((16, 16))
+        self.encoder.final_conv = nn.Conv2d(128, 1, kernel_size=1)
+
+        # spatial predictor
+        # [bz, 3, 16, 16] -> [bz, 1, 16, 16]
         self.predictor = nn.Sequential(
-            nn.Linear(self.repr_dim + 2, 256),
+            nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            nn.Linear(256, self.repr_dim)
+            nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 1, kernel_size=1)
         )
+
 
 
     def forward(self, states, actions, train=False):
@@ -74,56 +83,80 @@ class MockModel(nn.Module):
 
         if train:
             states_flat = states.view(B * T, C, H, W)
-            # print("states shape after reshaping:", states_flat.shape)
-            encoded_states = self.encoder(states_flat)
+            # print("states_flat shape:", states_flat.shape)
+            # encoded_states = self.encoder(states_flat)
+
+            x = self.encoder.conv1(states_flat)
+            x = self.encoder.bn1(x)
+            x = self.encoder.relu(x)
+            x = self.encoder.maxpool(x)
+            x = self.layer1(x)
+            x = self.layer2(x)
+            x = self.encoder.avgpool(x)
+            encoded_states = self.encoder.final_conv(x)
+
             # print("states shape after encoder:", encoded_states.shape)
-            latent_states = encoded_states.view(B, T, -1)
+            latent_states = encoded_states.view(B, T, 16, 16)
             # print("latent states shape:", latent_states.shape)
 
-            # latent_states -- (64, 17, D)
+            # latent_states -- (64, 17, 16, 16)
             # actions -- (64, 16, 2)
             # predictions -- (64, 16, D)
 
             # Predict at each time step t:
-            # input_to_predictor -- (64, D+2)
-            # predicted_latent_state -- (64, D)
+            # input_to_predictor -- (64, 3, 16, 16)
+            # predicted_latent_state -- (64, 1, 16, 16)
 
             predicted_latents = []
 
             for t in range(T - 1):
                 # Concatenate latent state and action at time step t
-                input_to_predictor = torch.cat([latent_states[:, t, :], actions[:, t, :]], dim=-1)
+                # actions_t (64, 2) --> (64, 2, 16, 16)
+                actions_t = actions[:, t, :]
+                actions_broadcasted = actions_t.unsqueeze(2).unsqueeze(3).repeat(1, 1, 16, 16)
+
+                input_to_predictor = torch.cat([latent_states[:, t:t+1, :, :], actions_broadcasted], dim=1)
                 
                 # Predict the next latent state using the predictor
                 predicted_latent_state = self.predictor(input_to_predictor)
-                predicted_latents.append(predicted_latent_state)
+                predicted_latents.append(predicted_latent_state.view(B, -1))
 
             # Stack the predicted latents
             predictions = torch.stack(predicted_latents, dim=1)
 
-            return predictions, latent_states
+            return predictions, latent_states.view(B, T, -1)    # [B, T, 256]
 
 
         else:
             # Inference logic
             init_state = states[:, 0, :, :, :]
-            encoded_init = self.encoder(init_state.view(B, C, H, W))
-            latent_state = encoded_init.view(B, -1)
+            # encoded_init = self.encoder(init_state.view(B, C, H, W))
+            x = self.encoder.conv1(init_state)
+            x = self.encoder.bn1(x)
+            x = self.encoder.relu(x)
+            x = self.encoder.maxpool(x)
+            x = self.layer1(x)
+            x = self.layer2(x)
+            x = self.encoder.avgpool(x)
+            encoded_init = self.encoder.final_conv(x)       # [B, 1, 16, 16]
+
+            # latent_state = encoded_init.view(B, -1)
             predictions = []
+            predictions.append(encoded_init.view(B, -1))
 
-            for t in range(actions.shape[1] + 1):
-                if t == 0:
-                    predictions.append(latent_state)
-                else:
-                    # Predict the next state using the previous state and action
-                    input_to_predictor = torch.cat([latent_state, actions[:, t-1, :]], dim=-1)
+            for t in range(T - 1):
+                # Predict the next state using the previous state and action
+                actions_t = actions[:, t, :]
+                actions_broadcasted = actions_t.unsqueeze(2).unsqueeze(3).repeat(1, 1, 16, 16)
 
-                    predicted_state = self.predictor(input_to_predictor)
-                    predictions.append(predicted_state)
+                input_to_predictor = torch.cat([encoded_init, actions_broadcasted], dim=1)
+
+                predicted_state = self.predictor(input_to_predictor)
+                predictions.append(predicted_state.view(B, -1))
 
             predictions = torch.stack(predictions, dim=1)
 
-        return predictions
+        return predictions      # [B, T, 256]
 
 
 
@@ -168,7 +201,7 @@ class MockModel(nn.Module):
             print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f}")
 
             # Save model for the epoch
-            model_save_path = f"models/resnet34_epoch{epoch+1}_loss{avg_loss:.4f}.pth"
+            model_save_path = f"models/resnet18_spatial_epoch{epoch+1}_loss{avg_loss:.4f}.pth"
             torch.save(model.state_dict(), model_save_path)
             print(f"Model saved to {model_save_path}")
 
@@ -217,6 +250,9 @@ if __name__ == "__main__":
 
     model = MockModel(device="cuda", bs=56, n_steps=17, output_dim=256)
     model = model.to("cuda")
+
+    # for name, module in model.encoder.named_modules():
+    #     print(f"{name}: {module}")
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total Parameters: {total_params}")
