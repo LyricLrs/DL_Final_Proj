@@ -1,0 +1,2 @@
+/opt/slurm/data/slurmd/job28547/slurm_script: line 13: module: command not found
+python3: can't open file '/home/rl3754/DL_Final_Proj/my_script.py': [Errno 2] No such file or directory

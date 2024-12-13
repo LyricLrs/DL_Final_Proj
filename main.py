@@ -45,22 +45,48 @@ def load_data(device):
 
     return probe_train_ds, probe_val_ds
 
+def load_train_data(device):
+    data_path = "/scratch/DL24FA"
+
+    train_ds = create_wall_dataloader(
+        data_path=f"{data_path}/train",
+        probing=False,
+        device=device,
+        train=True,
+    )
+
+    return train_ds
 
 def load_model():
     """Load or initialize the model."""
     # TODO: Replace MockModel with your trained model
-    model = MockModel()
-
-    model_path = "models/resnet34_epoch5_loss2.8255.pth"
-    checkpoint = torch.load(model_path, map_location=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-    model.load_state_dict(checkpoint)
-    model = model.to("cuda" if torch.cuda.is_available() else "cpu")
-    model.eval()
-
-    # total_params = sum(p.numel() for p in model.parameters())
-    # print(f"Total Parameters: {total_params}")
-
+    model = MockModel(device="cuda").to("cuda")
+    train = load_train_data(device="cuda")
+    model.train_model(dataset=train)
+    
+    # Save model for the epoch
+    model_save_path = f"models/10epochs_1213/model_weights.pth"
+    torch.save(model.state_dict(), model_save_path)
+    print(f"Model saved to {model_save_path}")
+    
     return model
+
+
+# def load_model():
+#     """Load or initialize the model."""
+#     # TODO: Replace MockModel with your trained model
+#     model = MockModel()
+
+#     # model_path = "models/resnet34_epoch5_loss2.8255.pth"
+#     # checkpoint = torch.load(model_path, map_location=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+#     # model.load_state_dict(checkpoint)
+#     model = model.to("cuda" if torch.cuda.is_available() else "cpu")
+#     model.eval()
+
+#     # total_params = sum(p.numel() for p in model.parameters())
+#     # print(f"Total Parameters: {total_params}")
+
+#     return model
 
 
 def evaluate_model(device, model, probe_train_ds, probe_val_ds):

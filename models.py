@@ -165,7 +165,7 @@ class MockModel(nn.Module):
         Train the model.
         """
         learning_rate = 0.001       # could try smaller lr like 0.0002 & consine lr scheduler
-        num_epochs = 5
+        num_epochs = 10
         device = self.device
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate, weight_decay=1e-5)
         
@@ -198,12 +198,14 @@ class MockModel(nn.Module):
 
             avg_loss = epoch_loss / len(dataset)
 
-            print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f}")
-
             # Save model for the epoch
             model_save_path = f"models/resnet18_spatial_epoch{epoch+1}_loss{avg_loss:.4f}.pth"
-            torch.save(model.state_dict(), model_save_path)
+            torch.save(self.state_dict(), model_save_path)
             print(f"Model saved to {model_save_path}")
+            
+            print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f}")
+
+            
 
         print("Training complete.")
 
@@ -234,29 +236,29 @@ class Prober(torch.nn.Module):
         return output
 
 
-def load_data(device):
-    data_path = "/scratch/DL24FA"
-    train_ds = create_wall_dataloader(
-        data_path=f"{data_path}/train",
-        probing=False,
-        device=device,
-        train=True,
-        batch_size=56       # reduce bs to avoid OOM
-    )
-    return train_ds
+# def load_data(device):
+#     data_path = "/scratch/DL24FA"
+#     train_ds = create_wall_dataloader(
+#         data_path=f"{data_path}/train",
+#         probing=False,
+#         device=device,
+#         train=True,
+#         batch_size=56       # reduce bs to avoid OOM
+#     )
+#     return train_ds
 
 
-if __name__ == "__main__":
+# if __name__ == "__main__":
 
-    model = MockModel(device="cuda", bs=56, n_steps=17, output_dim=256)
-    model = model.to("cuda")
+#     model = MockModel(device="cuda", bs=56, n_steps=17, output_dim=256)
+#     model = model.to("cuda")
 
-    # for name, module in model.encoder.named_modules():
-    #     print(f"{name}: {module}")
+#     # for name, module in model.encoder.named_modules():
+#     #     print(f"{name}: {module}")
 
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"Total Parameters: {total_params}")
+#     total_params = sum(p.numel() for p in model.parameters())
+#     print(f"Total Parameters: {total_params}")
 
-    train_ds = load_data(device="cuda")
+#     train_ds = load_data(device="cuda")
 
-    model.train_model(dataset=train_ds)
+#     model.train_model(dataset=train_ds)
