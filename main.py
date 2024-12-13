@@ -61,13 +61,26 @@ def load_model():
     """Load or initialize the model."""
     # TODO: Replace MockModel with your trained model
     model = MockModel(device="cuda").to("cuda")
+
+    model = MockModel(device="cuda", bs=56, n_steps=17, output_dim=256)
+    model = model.to("cuda")
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Total Parameters: {total_params}")
+    
     train = load_train_data(device="cuda")
     model.train_model(dataset=train)
-    
+
     # Save model for the epoch
     model_save_path = f"models/10epochs_1213/model_weights.pth"
     torch.save(model.state_dict(), model_save_path)
     print(f"Model saved to {model_save_path}")
+
+    # model = MockModel()
+    # model_path = "models/10epochs_1213/model_weights.pth"
+    # checkpoint = torch.load(model_path, map_location=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+    # model.load_state_dict(checkpoint)
+    # model = model.to("cuda" if torch.cuda.is_available() else "cpu")
+    # model.eval()
     
     return model
 
