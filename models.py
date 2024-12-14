@@ -144,7 +144,7 @@ class MockModel(nn.Module):
             predictions = []
             predictions.append(encoded_init.view(B, -1))
 
-            for t in range(T - 1):
+            for t in range(actions.shape[1]):
                 # Predict the next state using the previous state and action
                 actions_t = actions[:, t, :]
                 actions_broadcasted = actions_t.unsqueeze(2).unsqueeze(3).repeat(1, 1, 16, 16)
