@@ -144,7 +144,7 @@ class MockModel(nn.Module):
             predictions = []
             predictions.append(encoded_init.view(B, -1))
 
-            for t in range(T - 1):
+            for t in range(actions.shape[1]):
                 # Predict the next state using the previous state and action
                 actions_t = actions[:, t, :]
                 actions_broadcasted = actions_t.unsqueeze(2).unsqueeze(3).repeat(1, 1, 16, 16)
@@ -165,7 +165,7 @@ class MockModel(nn.Module):
         Train the model.
         """
         learning_rate = 0.001       # could try smaller lr like 0.0002 & consine lr scheduler
-        num_epochs = 10
+        num_epochs = 5
         device = self.device
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate, weight_decay=1e-5)
         
