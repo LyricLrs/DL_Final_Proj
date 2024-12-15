@@ -4,8 +4,6 @@ import torch
 from models import MockModel
 import glob
 
-import os
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 def get_device():
     """Check for GPU availability."""
@@ -22,7 +20,6 @@ def load_data(device):
         probing=True,
         device=device,
         train=True,
-        batch_size=64,
     )
 
     probe_val_normal_ds = create_wall_dataloader(
@@ -30,7 +27,6 @@ def load_data(device):
         probing=True,
         device=device,
         train=False,
-        batch_size=64,
     )
 
     probe_val_wall_ds = create_wall_dataloader(
@@ -38,12 +34,43 @@ def load_data(device):
         probing=True,
         device=device,
         train=False,
-        batch_size=64,
     )
 
-    probe_val_ds = {"normal": probe_val_normal_ds, "wall": probe_val_wall_ds}
+    probe_val_wall_other_ds = create_wall_dataloader(
+        data_path=f"{data_path}/probe_wall_other/val",
+        probing=True,
+        device=device,
+        train=False,
+    )
+    probe_val_ds = {
+        "normal": probe_val_normal_ds,
+        "wall": probe_val_wall_ds,
+        "wall_other": probe_val_wall_other_ds,
+    }
 
     return probe_train_ds, probe_val_ds
+
+
+def load_expert_data(device):
+    data_path = "/scratch/DL24FA"
+
+    probe_train_expert_ds = create_wall_dataloader(
+        data_path=f"{data_path}/probe_expert/train",
+        probing=True,
+        device=device,
+        train=True,
+    )
+
+    probe_val_expert_ds = {
+        "expert": create_wall_dataloader(
+            data_path=f"{data_path}/probe_expert/val",
+            probing=True,
+            device=device,
+            train=False,
+        )
+    }
+
+    return probe_train_expert_ds, probe_val_expert_ds
 
 
 def load_model():
@@ -51,14 +78,11 @@ def load_model():
     # TODO: Replace MockModel with your trained model
     model = MockModel()
 
-    model_path = "models/resnet34_epoch5_loss2.8255.pth"
+    model_path = "lyric_models/resnet18_spatial_epoch5_loss1.0180.pth"
     checkpoint = torch.load(model_path, map_location=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
     model.load_state_dict(checkpoint)
     model = model.to("cuda" if torch.cuda.is_available() else "cpu")
     model.eval()
-
-    # total_params = sum(p.numel() for p in model.parameters())
-    # print(f"Total Parameters: {total_params}")
 
     return model
 
@@ -82,6 +106,13 @@ def evaluate_model(device, model, probe_train_ds, probe_val_ds):
 
 if __name__ == "__main__":
     device = get_device()
-    probe_train_ds, probe_val_ds = load_data(device)
     model = load_model()
+    
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total Trainable Parameters: {total_params:,}")
+
+    probe_train_ds, probe_val_ds = load_data(device)
     evaluate_model(device, model, probe_train_ds, probe_val_ds)
+
+    probe_train_expert_ds, probe_val_expert_ds = load_expert_data(device)
+    evaluate_model(device, model, probe_train_expert_ds, probe_val_expert_ds)
