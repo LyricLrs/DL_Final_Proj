@@ -199,7 +199,7 @@ class MockModel(nn.Module):
             avg_loss = epoch_loss / len(dataset)
 
             # Save model for the epoch
-            model_save_path = f"models/resnet18_spatial_epoch{epoch+1}_loss{avg_loss:.4f}.pth"
+            model_save_path = f"models/5epochs_1215/resnet18_spatial_epoch{epoch+1}_loss{avg_loss:.4f}.pth"
             torch.save(self.state_dict(), model_save_path)
             print(f"Model saved to {model_save_path}")
             

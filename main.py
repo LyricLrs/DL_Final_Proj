@@ -13,7 +13,6 @@ def get_device():
     print("Using device:", device)
     return device
 
-
 def load_data(device):
     data_path = "/scratch/DL24FA"
 
@@ -22,7 +21,6 @@ def load_data(device):
         probing=True,
         device=device,
         train=True,
-        batch_size=64,
     )
 
     probe_val_normal_ds = create_wall_dataloader(
@@ -30,7 +28,6 @@ def load_data(device):
         probing=True,
         device=device,
         train=False,
-        batch_size=64,
     )
 
     probe_val_wall_ds = create_wall_dataloader(
@@ -38,12 +35,44 @@ def load_data(device):
         probing=True,
         device=device,
         train=False,
-        batch_size=64,
     )
 
-    probe_val_ds = {"normal": probe_val_normal_ds, "wall": probe_val_wall_ds}
+    probe_val_wall_other_ds = create_wall_dataloader(
+        data_path=f"{data_path}/probe_wall_other/val",
+        probing=True,
+        device=device,
+        train=False,
+    )
+
+    probe_val_ds = {
+        "normal": probe_val_normal_ds,
+        "wall": probe_val_wall_ds,
+        "wall_other": probe_val_wall_other_ds,
+    }
 
     return probe_train_ds, probe_val_ds
+
+
+def load_expert_data(device):
+    data_path = "/scratch/DL24FA"
+
+    probe_train_expert_ds = create_wall_dataloader(
+        data_path=f"{data_path}/probe_expert/train",
+        probing=True,
+        device=device,
+        train=True,
+    )
+
+    probe_val_expert_ds = {
+        "expert": create_wall_dataloader(
+            data_path=f"{data_path}/probe_expert/val",
+            probing=True,
+            device=device,
+            train=False,
+        )
+    }
+
+    return probe_train_expert_ds, probe_val_expert_ds
 
 def load_train_data(device):
     data_path = "/scratch/DL24FA"
@@ -57,46 +86,43 @@ def load_train_data(device):
 
     return train_ds
 
-# def load_model():
-#     """Load or initialize the model."""
-#     # TODO: Replace MockModel with your trained model
-#     model = MockModel(device="cuda").to("cuda")
-
-#     model = MockModel(device="cuda", bs=56, n_steps=17, output_dim=256)
-#     model = model.to("cuda")
-#     total_params = sum(p.numel() for p in model.parameters())
-#     print(f"Total Parameters: {total_params}")
-    
-#     train = load_train_data(device="cuda")
-#     model.train_model(dataset=train)
-
-#     # Save model for the epoch
-#     model_save_path = f"models/10epochs_1213/model_weights.pth"
-#     torch.save(model.state_dict(), model_save_path)
-#     print(f"Model saved to {model_save_path}")
-
-    
-#     return model
-
-
 def load_model():
     """Load or initialize the model."""
     # TODO: Replace MockModel with your trained model
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        
+
     model = MockModel()
-
-    model_path = "models/5epochs_1212/resnet18_spatial_epoch5_loss1.0180.pth"
-    checkpoint = torch.load(model_path, map_location=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-    model.load_state_dict(checkpoint)
-    model = model.to("cuda" if torch.cuda.is_available() else "cpu")
-    model.eval()
-
+    model = model.to("cuda")
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Total Parameters: {total_params}")
+    
+    train = load_train_data(device="cuda")
+    model.train_model(dataset=train)
 
+    # Save model for the epoch
+    model_save_path = f"models/5epochs_1214/model_weights.pth"
+    torch.save(model.state_dict(), model_save_path)
+    print(f"Model saved to {model_save_path}")
+
+    
     return model
+
+
+# def load_model():
+#     """Load or initialize the model."""
+#     # TODO: Replace MockModel with your trained model
+        
+#     model = MockModel()
+
+#     model_path = "models/5epochs_1212/model_weights.pth"
+#     checkpoint = torch.load(model_path, map_location=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+#     model.load_state_dict(checkpoint)
+#     model = model.to("cuda" if torch.cuda.is_available() else "cpu")
+#     model.eval()
+
+#     total_params = sum(p.numel() for p in model.parameters())
+#     print(f"Total Parameters: {total_params}")
+
+#     return model
 
 
 def evaluate_model(device, model, probe_train_ds, probe_val_ds):
@@ -118,6 +144,13 @@ def evaluate_model(device, model, probe_train_ds, probe_val_ds):
 
 if __name__ == "__main__":
     device = get_device()
-    probe_train_ds, probe_val_ds = load_data(device)
     model = load_model()
+    
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total Trainable Parameters: {total_params:,}")
+
+    probe_train_ds, probe_val_ds = load_data(device)
     evaluate_model(device, model, probe_train_ds, probe_val_ds)
+
+    probe_train_expert_ds, probe_val_expert_ds = load_expert_data(device)
+    evaluate_model(device, model, probe_train_expert_ds, probe_val_expert_ds)
