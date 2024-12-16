@@ -27,41 +27,92 @@ class MockModel(nn.Module):
     A simple model for testing purposes.
     """
 
-    def __init__(self, device="cuda", bs=64, n_steps=17, output_dim=256):
+    def __init__(self, device="cuda", output_dim=256):
         super(MockModel, self).__init__()
         self.device = device
-        self.bs = bs
-        self.n_steps = n_steps
         self.repr_dim = output_dim  # 256-dimensional latent space
         
-        # Resnet 18
-        self.encoder = models.resnet18()
+        # build a simple cnn encoder
+        self.encoder = nn.Sequential(
+            # Input: [2, 65, 65]
+            nn.Conv2d(2, 32, kernel_size=3, stride=1, padding=1),  # [32, 65, 65]
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1),  # [32, 65, 65]
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),  # [32, 32, 32]
 
-        # increase feature map
-        self.encoder.conv1 = nn.Conv2d(
-            in_channels=2, 
-            out_channels=self.encoder.conv1.out_channels, 
-            kernel_size=self.encoder.conv1.kernel_size, 
-            # stride=self.encoder.conv1.stride,
-            stride=(1, 1),
-            padding=self.encoder.conv1.padding, 
-            bias=True
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),  # [64, 32, 32]
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),  # [64, 32, 32]
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),  # [64, 16, 16]
+
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),  # [128, 16, 16]
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1),  # [128, 16, 16]
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+
+            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),  # [256, 16, 16]
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),  # [256, 16, 16]
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+
+            nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1),  # [512, 16, 16]
+            nn.BatchNorm2d(512),
+            nn.ReLU(),
+            nn.Dropout(0.3),  # Regularization
+            nn.Conv2d(512, 256, kernel_size=3, stride=1, padding=1),  # [256, 16, 16]
+            nn.BatchNorm2d(256),
+            nn.ReLU(),
+
+            nn.Conv2d(256, 128, kernel_size=1),  # [128, 16, 16]
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+
+            nn.Conv2d(128, 64, kernel_size=1),  # [64, 16, 16]
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+
+            nn.Conv2d(64, 32, kernel_size=1),  # [32, 16, 16]
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+
+            nn.Conv2d(32, 16, kernel_size=1),  # [16, 16, 16]
+            nn.BatchNorm2d(16),
+            nn.ReLU(),
+
+            nn.Conv2d(16, 1, kernel_size=1)  # [1, 16, 16]
         )
-        self.encoder.maxpool = nn.MaxPool2d(kernel_size=3, stride=1, padding=1, dilation=1, ceil_mode=False)
 
-        self.layer1 = self.encoder.layer1
-        self.layer2 = self.encoder.layer2
-        self.encoder.avgpool = nn.AdaptiveAvgPool2d((16, 16))
-        self.encoder.final_conv = nn.Conv2d(128, 1, kernel_size=1)
 
         # spatial predictor
         # [bz, 3, 16, 16] -> [bz, 1, 16, 16]
         self.predictor = nn.Sequential(
-            nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1),  # [16, H, W]
+            nn.BatchNorm2d(16),
             nn.ReLU(),
-            nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
+            
+            nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1), # [32, H, W]
+            nn.BatchNorm2d(32),
             nn.ReLU(),
-            nn.Conv2d(32, 1, kernel_size=1)
+            
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1), # [64, H, W]
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            
+            nn.Conv2d(64, 32, kernel_size=3, stride=1, padding=1), # [32, H, W]
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            
+            nn.Conv2d(32, 1, kernel_size=1)                        # [1, H, W]
         )
 
 
@@ -84,16 +135,7 @@ class MockModel(nn.Module):
         if train:
             states_flat = states.view(B * T, C, H, W)
             # print("states_flat shape:", states_flat.shape)
-            # encoded_states = self.encoder(states_flat)
-
-            x = self.encoder.conv1(states_flat)
-            x = self.encoder.bn1(x)
-            x = self.encoder.relu(x)
-            x = self.encoder.maxpool(x)
-            x = self.layer1(x)
-            x = self.layer2(x)
-            x = self.encoder.avgpool(x)
-            encoded_states = self.encoder.final_conv(x)
+            encoded_states = self.encoder(states_flat)
 
             # print("states shape after encoder:", encoded_states.shape)
             latent_states = encoded_states.view(B, T, 16, 16)
@@ -130,15 +172,7 @@ class MockModel(nn.Module):
         else:
             # Inference logic
             init_state = states[:, 0, :, :, :]
-            # encoded_init = self.encoder(init_state.view(B, C, H, W))
-            x = self.encoder.conv1(init_state)
-            x = self.encoder.bn1(x)
-            x = self.encoder.relu(x)
-            x = self.encoder.maxpool(x)
-            x = self.layer1(x)
-            x = self.layer2(x)
-            x = self.encoder.avgpool(x)
-            encoded_init = self.encoder.final_conv(x)       # [B, 1, 16, 16]
+            encoded_init = self.encoder(init_state)
 
             # latent_state = encoded_init.view(B, -1)
             predictions = []
@@ -165,7 +199,7 @@ class MockModel(nn.Module):
         Train the model.
         """
         learning_rate = 0.001       # could try smaller lr like 0.0002 & consine lr scheduler
-        num_epochs = 5
+        num_epochs = 10
         device = self.device
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate, weight_decay=1e-5)
         
@@ -201,7 +235,7 @@ class MockModel(nn.Module):
             print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f}")
 
             # Save model for the epoch
-            model_save_path = f"models/Lyric_try/resnet18_spatial_epoch{epoch+1}_loss{avg_loss:.4f}.pth"
+            model_save_path = f"model_weights_test.pth"
             torch.save(model.state_dict(), model_save_path)
             print(f"Model saved to {model_save_path}")
 
@@ -248,14 +282,14 @@ def load_data(device):
 
 if __name__ == "__main__":
 
-    model = MockModel(device="cuda", bs=56, n_steps=17, output_dim=256)
+    model = MockModel(device="cuda", output_dim=256)
     model = model.to("cuda")
 
     # for name, module in model.encoder.named_modules():
     #     print(f"{name}: {module}")
 
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"Total Parameters: {total_params}")
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total Trainable Parameters: {total_params:,}")
 
     train_ds = load_data(device="cuda")
 
