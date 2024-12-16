@@ -6,8 +6,6 @@ from tqdm import tqdm
 import torch.optim as optim
 from dataset import create_wall_dataloader
 import torchvision.models as models
-
-from transformers import ViTConfig, ViTModel
 from loss import VICRegLoss, BarlowTwinsLoss
 
 
@@ -199,7 +197,7 @@ class MockModel(nn.Module):
         Train the model.
         """
         learning_rate = 0.001       # could try smaller lr like 0.0002 & consine lr scheduler
-        num_epochs = 10
+        num_epochs = 6
         device = self.device
         optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate, weight_decay=1e-5)
         
@@ -235,7 +233,7 @@ class MockModel(nn.Module):
             print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f}")
 
             # Save model for the epoch
-            model_save_path = f"model_weights_test.pth"
+            model_save_path = f"model_weights_replicate.pth"
             torch.save(model.state_dict(), model_save_path)
             print(f"Model saved to {model_save_path}")
 
@@ -284,9 +282,6 @@ if __name__ == "__main__":
 
     model = MockModel(device="cuda", output_dim=256)
     model = model.to("cuda")
-
-    # for name, module in model.encoder.named_modules():
-    #     print(f"{name}: {module}")
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total Trainable Parameters: {total_params:,}")
