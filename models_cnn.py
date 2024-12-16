@@ -235,7 +235,7 @@ class MockModel(nn.Module):
             print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f}")
 
             # Save model for the epoch
-            model_save_path = f"customcnn/cnn_spatial_epoch{epoch+1}_loss{avg_loss:.4f}.pth"
+            model_save_path = f"customcnn/Lyric_try/cnn_spatial_epoch{epoch+1}_loss{avg_loss:.4f}.pth"
             torch.save(model.state_dict(), model_save_path)
             print(f"Model saved to {model_save_path}")
 

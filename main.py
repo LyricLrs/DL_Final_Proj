@@ -1,7 +1,7 @@
 from dataset import create_wall_dataloader
 from evaluator import ProbingEvaluator
 import torch
-from models import MockModel
+from models_cnn import MockModel
 import glob
 
 
@@ -78,7 +78,7 @@ def load_model():
     # TODO: Replace MockModel with your trained model
     model = MockModel()
 
-    model_path = "lyric_models/resnet18_spatial_epoch5_loss1.0180.pth"
+    model_path = "customcnn/Lyric_try/cnn_spatial_epoch6_loss0.6517.pth"
     checkpoint = torch.load(model_path, map_location=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
     model.load_state_dict(checkpoint)
     model = model.to("cuda" if torch.cuda.is_available() else "cpu")
